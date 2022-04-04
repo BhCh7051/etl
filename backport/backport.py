@@ -14,8 +14,12 @@ from sqlalchemy.engine import Engine
 
 from etl.db import get_engine
 from etl.files import checksum_str
-from etl.grapher_model import (GrapherConfig, GrapherDatasetModel,
-                               GrapherSourceModel, GrapherVariableModel)
+from etl.grapher_model import (
+    GrapherConfig,
+    GrapherDatasetModel,
+    GrapherSourceModel,
+    GrapherVariableModel,
+)
 
 WALDEN_NAMESPACE = os.environ.get("WALDEN_NAMESPACE", "backport")
 
@@ -162,7 +166,7 @@ def _content_hash_values(engine: Engine, variable_ids: list[int]) -> str:
     """
     log.info("backport.content_hash_values.start", variable_ids=variable_ids)
     t = time.time()
-    content_hash = engine.execute(q, variable_ids=variable_ids).first()[0]
+    content_hash: str = engine.execute(q, variable_ids=variable_ids).first()[0]
     assert content_hash is not None
     log.info("backport.content_hash_values.end", hash=content_hash, t=time.time() - t)
     return content_hash
@@ -183,7 +187,7 @@ def _checksums_match(short_name: str, md5_config: str, md5_values: str) -> bool:
 
 
 def _create_short_name(
-    short_name: Optional[str], dataset_id: int, variable_id: int
+    short_name: Optional[str], dataset_id: int, variable_id: Optional[int]
 ) -> str:
     """Create sensible short name for dataset."""
     if short_name:
@@ -197,30 +201,12 @@ def _create_short_name(
             return str(dataset_id)
 
 
-@click.command()
-@click.option("--dataset-id", type=int)
-@click.option("--variable-id", type=int)
-@click.option(
-    "--short-name", type=str, help="Short name of a dataset, must be under_score"
-)
-@click.option(
-    "--force/--no-force",
-    default=False,
-    type=bool,
-    help="Force overwrite even if checksums match",
-)
-@click.option(
-    "--dry-run/--no-dry-run",
-    default=False,
-    type=bool,
-    help="Do not add dataset to a catalog on dry-run",
-)
 def backport(
     dataset_id: int,
-    variable_id: int,
-    short_name: str,
-    force: bool,
-    dry_run: bool,
+    variable_id: Optional[int] = None,
+    short_name: Optional[str] = None,
+    force: bool = False,
+    dry_run: bool = False,
 ) -> None:
     engine = get_engine()
 
@@ -271,9 +257,31 @@ def backport(
     log.info("backport.finished")
 
 
+@click.command()
+@click.option("--dataset-id", type=int)
+@click.option("--variable-id", type=int)
+@click.option(
+    "--short-name", type=str, help="Short name of a dataset, must be under_score"
+)
+@click.option(
+    "--force/--no-force",
+    default=False,
+    type=bool,
+    help="Force overwrite even if checksums match",
+)
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=False,
+    type=bool,
+    help="Do not add dataset to a catalog on dry-run",
+)
+def backport_cli(*args) -> None:
+    return backport(*args)
+
+
 if __name__ == "__main__":
     # Example (run against staging DB):
     #   backport --dataset-id 5426 --variable-id 244087 --name political_regimes --dry-run --force
     #   or entire dataset
     #   backport --dataset-id 5426 --short-name political_regimes --force
-    backport()
+    backport_cli()
