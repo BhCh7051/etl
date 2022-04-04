@@ -40,6 +40,7 @@ from owid import walden
 from etl import files, paths, git
 from etl.helpers import get_etag
 from etl.grapher_import import upsert_table, upsert_dataset
+from etl import backport_helpers
 
 Graph = Dict[str, Set[str]]
 DAG = Dict[str, Any]
@@ -196,6 +197,9 @@ def parse_step(step_name: str, dag: Dict[str, Any]) -> "Step":
 
     elif step_type == "grapher":
         step = GrapherStep(path, dependencies)
+
+    elif step_type == "backport":
+        step = BackportStep(path, dependencies)
 
     elif step_type == "data-private":
         step = DataStepPrivate(path, dependencies)
@@ -590,6 +594,28 @@ class ETagStep(Step):
 
     def checksum_output(self) -> str:
         return get_etag(f"https://{self.path}")
+
+
+class BackportStep(DataStep):
+    def __str__(self) -> str:
+        return f"backport://{self.path}"
+
+    def run(self) -> None:
+        # make sure the encosing folder is there
+        self._dest_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        backport_helpers.create_dataset(
+            self._dest_dir.as_posix(), self._dest_dir.name
+        ).save()
+
+        # modify the dataset to remember what inputs were used to build it
+        dataset = self._output_dataset
+        dataset.metadata.source_checksum = self.checksum_input()
+        dataset.save()
+
+    @property
+    def _dest_dir(self) -> Path:
+        return paths.DATA_DIR / self.path.lstrip("/")
 
 
 class DataStepPrivate(DataStep):

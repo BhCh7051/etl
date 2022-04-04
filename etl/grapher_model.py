@@ -116,10 +116,10 @@ class GrapherVariableModel(SQLModel, table=True):
 
 class GrapherSourceDescription(BaseModel):
     link: str
-    retrievedDate: str
+    retrievedDate: Optional[str] = None
     additionalInfo: Optional[str] = None
     dataPublishedBy: str
-    dataPublisherSource: str
+    dataPublisherSource: Optional[str] = None
 
 
 class GrapherSourceModel(SQLModel, table=True):

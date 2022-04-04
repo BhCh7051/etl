@@ -4,6 +4,7 @@
 #
 
 from typing import Callable, List, Any, Optional
+import os
 import time
 import sys
 import re
@@ -13,6 +14,10 @@ import click
 
 from etl.steps import load_dag, compile_steps, DAG, paths
 from etl import config
+from owid.walden import Catalog as WaldenCatalog
+
+
+WALDEN_NAMESPACE = os.environ.get("WALDEN_NAMESPACE", "backport")
 
 
 @click.command()
@@ -23,6 +28,11 @@ from etl import config
 @click.option("--private", is_flag=True, help="Execute private steps")
 @click.option(
     "--grapher", is_flag=True, help="Publish changes to grapher (OWID staff only)"
+)
+@click.option(
+    "--backport",
+    is_flag=True,
+    help="Add steps for backporting OWID datasets (OWID staff only)",
 )
 @click.option("--exclude", help="Comma-separated patterns to exclude")
 @click.option(
@@ -38,17 +48,22 @@ def main(
     force: bool = False,
     private: bool = False,
     grapher: bool = False,
+    backport: bool = False,
     exclude: Optional[str] = None,
     dag_path: Path = paths.DAG_FILE,
 ) -> None:
     """
     Execute all ETL steps listed in dag.yaml
     """
-    if grapher:
+    if grapher or backport:
         sanity_check_db_settings()
 
     # Load our graph of steps and the things they depend on
     dag = load_dag(dag_path)
+
+    # Add steps for backporting datasets (there are currently >800 of them)
+    if backport:
+        dag.update(_backporting_steps())
 
     excludes = exclude.split(",") if exclude else []
 
@@ -138,6 +153,23 @@ def _validate_private_steps(dag: DAG) -> None:
 
 def _is_private_step(step_name: str) -> bool:
     return bool(re.findall(r".*?-private://", step_name))
+
+
+def _backporting_steps() -> DAG:
+    """Return a DAG of steps for backporting datasets."""
+    dag: DAG = {}
+
+    # load all backported datasets from walden
+    for ds in WaldenCatalog().find(namespace=WALDEN_NAMESPACE):
+        # two files are generated for each dataset, skip one
+        if ds.short_name.endswith("_values"):
+            short_name = ds.short_name.rstrip("_values")
+            dag[f"backport://backport/owid/latest/{short_name}"] = {
+                f"walden://{ds.namespace}/latest/{short_name}_values",
+                f"walden://{ds.namespace}/latest/{short_name}_config",
+            }
+
+    return dag
 
 
 if __name__ == "__main__":

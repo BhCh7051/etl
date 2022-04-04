@@ -39,7 +39,9 @@ def bulk_backport(
 
     log.info("bulk_backport.start", n=len(df))
 
-    for ds in track(df.itertuples(), description="Backporting", total=len(df)):
+    # TODO: should I enable it or just add it to structlog?
+    # for ds in track(df.itertuples(), description="Backporting", total=len(df)):
+    for ds in df.itertuples():
         log.info("bulk_backport", dataset_id=ds.id, name=ds.name)
         backport(
             dataset_id=ds.id,
@@ -47,7 +49,7 @@ def bulk_backport(
             # short_name
         )
 
-    log.info("backport.finished")
+    log.info("bulk_backport.finished")
 
 
 if __name__ == "__main__":

@@ -193,12 +193,12 @@ def _create_short_name(
     if short_name:
         validate_underscore(short_name, "short-name")
         # prepend dataset id to short name
-        return f"{dataset_id}_{short_name}"
+        return f"dataset_{dataset_id}_{short_name}"
     else:
         if variable_id:
-            return f"{dataset_id}_{variable_id}"
+            return f"dataset_{dataset_id}_{variable_id}"
         else:
-            return str(dataset_id)
+            return f"dataset_{dataset_id}"
 
 
 def backport(
@@ -208,12 +208,14 @@ def backport(
     force: bool = False,
     dry_run: bool = False,
 ) -> None:
+    lg = log.bind(dataset_id=dataset_id)
+
     engine = get_engine()
 
     # get data from database
-    log.info("backport.loading_dataset", dataset_id=dataset_id)
+    lg.info("backport.loading_dataset")
     ds = GrapherDatasetModel.load_dataset(engine, dataset_id)
-    log.info("backport.loading_variable", variable_id=variable_id or "all")
+    lg.info("backport.loading_variable", variable_id=variable_id or "all")
     if variable_id:
         vars = [GrapherVariableModel.load_variable(engine, variable_id)]
     else:
@@ -237,24 +239,24 @@ def backport(
     # if checksums of data and config are identical, skip upload
     if not force:
         if _checksums_match(short_name, md5_config, md5_values):
-            log.info("backport.skip", short_name=short_name, reason="checksums match")
+            lg.info("backport.skip", short_name=short_name, reason="checksums match")
             return
 
     # upload config to walden
-    log.info("backport.upload_config")
+    lg.info("backport.upload_config")
     _upload_config_to_walden(
         config, _walden_config_metadata(ds, short_name, md5_config), dry_run
     )
 
     # upload values to walden
-    log.info("backport.loading_values", variables=variable_ids)
+    lg.info("backport.loading_values", variables=variable_ids)
     df = _load_values(engine, variable_ids)
-    log.info("backport.upload_values", size=len(df))
+    lg.info("backport.upload_values", size=len(df))
     _upload_values_to_walden(
         df, _walden_values_metadata(ds, short_name, md5_values), dry_run
     )
 
-    log.info("backport.finished")
+    lg.info("backport.finished")
 
 
 @click.command()
