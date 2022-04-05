@@ -42,20 +42,28 @@ def create_dataset(dest_dir: str, short_name: str) -> Dataset:
 
     # convert to float all columns we can
     for col in df.columns:
-        df[col] = df[col].astype(float, errors="ignore")
+        if df[col].dtype != float:
+            df[col] = df[col].astype(float, errors="ignore")
 
     # TODO: what about Table metadata? should I reuse what I have in a dataset?
     t = Table(df)
     t.metadata.short_name = short_name
 
     # add variables metadata
-    for col in df.columns:
+    for col in t.columns:
         variable = [v for v in config.variables if v.name == col][0]
         variable_source = [s for s in config.sources if s.id == variable.sourceId][0]
-        df[col].metadata = convert_grapher_variable(
+        t[col].metadata = convert_grapher_variable(
             variable,
             variable_source,
         )
+
+    # TODO: remove before merging
+    for c in t.columns:
+        try:
+            underscore_table(t[[c]])
+        except NameError:
+            print(f"Problem underscoring column {c}")
 
     ds.add(underscore_table(t))
     return ds

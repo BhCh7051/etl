@@ -1,7 +1,7 @@
 import click
 import pandas as pd
 import structlog
-from rich.progress import track
+from owid.catalog.utils import underscore
 
 from etl.db import get_engine
 
@@ -37,16 +37,21 @@ def bulk_backport(
     if dataset_ids:
         df = df[df.id.isin(dataset_ids)]
 
+    df["short_name"] = df.name.map(underscore)
+
     log.info("bulk_backport.start", n=len(df))
 
-    # TODO: should I enable it or just add it to structlog?
-    # for ds in track(df.itertuples(), description="Backporting", total=len(df)):
-    for ds in df.itertuples():
-        log.info("bulk_backport", dataset_id=ds.id, name=ds.name)
+    for i, ds in enumerate(df.itertuples()):
+        log.info(
+            "bulk_backport",
+            dataset_id=ds.id,
+            name=ds.name,
+            progress=f"{i + 1}/{len(df)}",
+        )
         backport(
             dataset_id=ds.id,
+            short_name=ds.short_name,
             dry_run=dry_run,
-            # short_name
         )
 
     log.info("bulk_backport.finished")
@@ -54,5 +59,5 @@ def bulk_backport(
 
 if __name__ == "__main__":
     # Example (run against staging DB):
-    #   bulk_backport -d 20 -d 21 --dry-run
+    #   bulk_backport -d 20 -d 21 -d 5426 --dry-run
     bulk_backport()

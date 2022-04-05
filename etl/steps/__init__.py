@@ -604,12 +604,11 @@ class BackportStep(DataStep):
         # make sure the encosing folder is there
         self._dest_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        backport_helpers.create_dataset(
+        dataset = backport_helpers.create_dataset(
             self._dest_dir.as_posix(), self._dest_dir.name
-        ).save()
+        )
 
         # modify the dataset to remember what inputs were used to build it
-        dataset = self._output_dataset
         dataset.metadata.source_checksum = self.checksum_input()
         dataset.save()
 
