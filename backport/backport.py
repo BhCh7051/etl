@@ -1,8 +1,7 @@
 import os
 import tempfile
-import time
 import datetime as dt
-from typing import Optional, cast
+from typing import Optional, cast, Any
 
 import click
 import pandas as pd
@@ -64,7 +63,7 @@ def _load_values(engine: Engine, variable_ids: list[int]) -> pd.DataFrame:
     """Get data values of a variable."""
     # NOTE: loading entity_name and variable_name is perhaps unnecessary, consider removing it
     # to speed up loading
-    q = f"""
+    q = """
     select
         d.entityId as entity_id,
         d.variableId as variable_id,
@@ -139,7 +138,7 @@ def _checksum_match(short_name: str, md5: str) -> bool:
         # datasets not found in catalog
         return False
 
-    return walden_ds.origin_md5 == md5
+    return (walden_ds.origin_md5 or "") == md5
 
 
 def _walden_timestamp(short_name: str) -> dt.datetime:
@@ -238,7 +237,7 @@ def backport(
     type=bool,
     help="Do not add dataset to a catalog on dry-run",
 )
-def backport_cli(*args) -> None:
+def backport_cli(*args: Any) -> None:
     return backport(*args)
 
 
