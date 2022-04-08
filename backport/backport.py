@@ -1,7 +1,8 @@
 import os
 import tempfile
 import time
-from typing import Optional
+import datetime as dt
+from typing import Optional, cast
 
 import click
 import pandas as pd
@@ -25,27 +26,25 @@ WALDEN_NAMESPACE = os.environ.get("WALDEN_NAMESPACE", "backport")
 
 log = structlog.get_logger()
 
+engine = get_engine()
 
-def _walden_values_metadata(
-    ds: GrapherDatasetModel, short_name: str, origin_md5: str
-) -> WaldenDataset:
+
+def _walden_values_metadata(ds: GrapherDatasetModel, short_name: str) -> WaldenDataset:
     """Create walden dataset for grapher dataset values.
     These datasets are not meant for direct consumption from the catalog, but rather
     for postprocessing in etl.
     :param short_name: short name of the dataset in catalog
-    :param origin_md5: MD5 hash of data values in grapher used to decide whether to recompute
-        or not in the next run
     """
     return WaldenDataset(
         namespace=WALDEN_NAMESPACE,
         short_name=f"{short_name}_values",
         name=ds.name,
+        date_accessed=dt.datetime.utcnow().isoformat(),
         description=ds.description,
         source_name="Our World in Data",
         url=f"https://owid.cloud/admin/datasets/{ds.id}",
         publication_date="latest",
         file_extension="feather",
-        origin_md5=origin_md5,
     )
 
 
@@ -53,10 +52,11 @@ def _walden_config_metadata(
     ds: GrapherDatasetModel, short_name: str, origin_md5: str
 ) -> WaldenDataset:
     """Create walden dataset for grapher dataset variables and metadata."""
-    config = _walden_values_metadata(ds, short_name, origin_md5)
+    config = _walden_values_metadata(ds, short_name)
     config.short_name = short_name + "_config"
     config.name = f"Grapher metadata for {short_name}"
     config.file_extension = "json"
+    config.origin_md5 = origin_md5
     return config
 
 
@@ -132,58 +132,19 @@ def _upload_values_to_walden(
             add_to_catalog(meta, f.name, upload=True)
 
 
-def _content_hash_values(engine: Engine, variable_ids: list[int]) -> str:
-    """Get content hash of values for given variables. This version is quite slow,
-    processing WBI dataset (7.7M data values) takes 33s.
-
-    An alternative to checking content sum of all data values would be creating a
-    changelog table for variables that would get updated by MySQL trigger whenever
-    a data value is updated. (or adding a column to existing variables table)
-
-    An example (taken from https://stackoverflow.com/questions/4753878/how-to-program-a-mysql-trigger-to-insert-row-into-another-table)
-    ```
-    delimiter #
-    create trigger variable_changelog_trig after insert on data_values
-    for each row
-    begin
-        insert into variable_changelog (variableId, updatedAt) values (variableId, NOW())
-        on duplicate key update
-            updatedAt = VALUES(updatedAt)
-    end#
-    ```
-
-    However, this might be quite inefficient for large data values. Better solution would be to
-    update variable `updatedAt` column on app level whenever its data value is updated.
-    """
-    q = """
-    SELECT MD5(
-        GROUP_CONCAT(
-            CONCAT_WS('#',value,year,entityId,variableId) SEPARATOR '##'
-        )
-    ) FROM data_values
-    where variableId in %(variable_ids)s
-    order by year, entityId, variableId
-    """
-    log.info("backport.content_hash_values.start", variable_ids=variable_ids)
-    t = time.time()
-    content_hash: str = engine.execute(q, variable_ids=variable_ids).first()[0]
-    assert content_hash is not None
-    log.info("backport.content_hash_values.end", hash=content_hash, t=time.time() - t)
-    return content_hash
-
-
-def _checksums_match(short_name: str, md5_config: str, md5_values: str) -> bool:
+def _checksum_match(short_name: str, md5: str) -> bool:
     try:
-        walden_ds_config = WaldenCatalog().find_one(short_name=f"{short_name}_config")
-        walden_ds_values = WaldenCatalog().find_one(short_name=f"{short_name}_values")
+        walden_ds = WaldenCatalog().find_one(short_name=short_name)
     except KeyError:
         # datasets not found in catalog
         return False
 
-    return (
-        walden_ds_config.origin_md5 == md5_config
-        and walden_ds_values.origin_md5 == md5_values
-    )
+    return walden_ds.origin_md5 == md5
+
+
+def _walden_timestamp(short_name: str) -> dt.datetime:
+    t = WaldenCatalog().find_one(short_name=short_name).date_accessed
+    return cast(dt.datetime, pd.to_datetime(t))
 
 
 def _create_short_name(
@@ -210,8 +171,6 @@ def backport(
 ) -> None:
     lg = log.bind(dataset_id=dataset_id)
 
-    engine = get_engine()
-
     # get data from database
     lg.info("backport.loading_dataset")
     ds = GrapherDatasetModel.load_dataset(engine, dataset_id)
@@ -224,6 +183,7 @@ def backport(
     variable_ids = [v.id for v in vars]
 
     # get sources for dataset and all variables
+    lg.info("backport.loading_sources")
     sources = GrapherSourceModel.load_sources(
         engine, dataset_id=ds.id, variable_ids=variable_ids
     )
@@ -232,15 +192,18 @@ def backport(
 
     config = _load_config(ds, vars, sources)
 
-    # get checksums of config and values
+    # get checksums of config
     md5_config = checksum_str(config.json(sort_keys=True, indent=0))
-    md5_values = _content_hash_values(engine, variable_ids)
 
-    # if checksums of data and config are identical, skip upload
     if not force:
-        if _checksums_match(short_name, md5_config, md5_values):
-            lg.info("backport.skip", short_name=short_name, reason="checksums match")
-            return
+        # first check config checksum
+        if _checksum_match(f"{short_name}_config", md5_config):
+            # then check dataEditedAt field
+            if ds.dataEditedAt < _walden_timestamp(f"{short_name}_config"):
+                lg.info(
+                    "backport.skip", short_name=short_name, reason="checksums match"
+                )
+                return
 
     # upload config to walden
     lg.info("backport.upload_config")
@@ -252,9 +215,7 @@ def backport(
     lg.info("backport.loading_values", variables=variable_ids)
     df = _load_values(engine, variable_ids)
     lg.info("backport.upload_values", size=len(df))
-    _upload_values_to_walden(
-        df, _walden_values_metadata(ds, short_name, md5_values), dry_run
-    )
+    _upload_values_to_walden(df, _walden_values_metadata(ds, short_name), dry_run)
 
     lg.info("backport.finished")
 

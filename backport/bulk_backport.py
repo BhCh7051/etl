@@ -2,10 +2,11 @@ import click
 import pandas as pd
 import structlog
 from owid.catalog.utils import underscore
+from owid import walden
 
 from etl.db import get_engine
 
-from .backport import backport
+from .backport import backport, WALDEN_NAMESPACE
 
 log = structlog.get_logger()
 
@@ -18,19 +19,22 @@ log = structlog.get_logger()
     type=bool,
     help="Do not add dataset to a catalog on dry-run",
 )
-def bulk_backport(
-    dataset_ids: list[int],
-    dry_run: bool,
-) -> None:
+@click.option(
+    "--limit",
+    default=1000000,
+    type=int,
+)
+def bulk_backport(dataset_ids: list[int], dry_run: bool, limit: int) -> None:
     engine = get_engine()
 
-    q = """
+    q = f"""
     select id, name, dataEditedAt, metadataEditedAt from datasets
     where not isPrivate
         and id in (
-            select distinct v.datasetId from chart_variables as cv
-            join variables as v on cv.variableId = v.id
+            select distinct v.datasetId from chart_dimensions as cd
+            join variables as v on cd.variableId = v.id
         )
+    limit {limit}
     """
     df = pd.read_sql(q, engine)
 
@@ -38,6 +42,20 @@ def bulk_backport(
         df = df[df.id.isin(dataset_ids)]
 
     df["short_name"] = df.name.map(underscore)
+
+    # add timestamp from existing datasets
+    # existing_ds = _existing_backport_datasets()
+    # __import__("ipdb").set_trace()
+    # df = df.merge(
+    #     existing_ds[["short_name", "date_accessed"]],
+    #     how="left",
+    #     left_on="short_name",
+    #     right_on="short_name",
+    # )
+
+    # df = df[["date_accessed", "dataEditedAt", "metadataEditedAt"]]
+
+    # __import__("ipdb").set_trace()
 
     log.info("bulk_backport.start", n=len(df))
 
@@ -55,6 +73,19 @@ def bulk_backport(
         )
 
     log.info("bulk_backport.finished")
+
+
+def _existing_backport_datasets():
+    catalog = walden.Catalog()
+    df = pd.DataFrame(ds.to_dict() for ds in catalog.find(namespace=WALDEN_NAMESPACE))
+
+    # keep only one from both `values` and `config`
+    df["short_name"] = df["short_name"].str.replace("_values|_config", "")
+    df = df.drop_duplicates(["short_name"])
+
+    df["date_accessed"] = pd.to_datetime(df["date_accessed"])
+
+    return df
 
 
 if __name__ == "__main__":

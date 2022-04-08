@@ -1,5 +1,6 @@
 from typing import cast
 
+import structlog
 import pandas as pd
 from owid.catalog import Dataset, Table
 from owid.catalog.utils import underscore_table
@@ -7,6 +8,9 @@ from owid.walden import Catalog
 
 from etl.grapher_model import GrapherConfig
 from etl.steps.data.converters import convert_grapher_dataset, convert_grapher_variable
+
+
+log = structlog.get_logger()
 
 
 def load_values(short_name: str) -> pd.DataFrame:
@@ -36,14 +40,27 @@ def create_dataset(dest_dir: str, short_name: str) -> Dataset:
     )
 
     # convert to wide format
+    long_mem_usage_mb = values.memory_usage().sum() / 1e6
     df = values.pivot(
         index=["entity_name", "year"], columns="variable_name", values="value"
     )
 
     # convert to float all columns we can
+    # NOTE: this is also done later before adding the dataset into catalog
     for col in df.columns:
         if df[col].dtype != float:
             df[col] = df[col].astype(float, errors="ignore")
+
+    # report compression ratio if the file is larger than >1MB
+    wide_mem_usage_mb = df.memory_usage().sum() / 1e6
+    if wide_mem_usage_mb > 1:
+        log.info(
+            "backport.long_to_wide_format",
+            short_name=short_name,
+            wide_mb=wide_mem_usage_mb,
+            long_mb=long_mem_usage_mb,
+            compression=f"{wide_mem_usage_mb / long_mem_usage_mb:.1%}",
+        )
 
     # TODO: what about Table metadata? should I reuse what I have in a dataset?
     t = Table(df)
@@ -57,13 +74,6 @@ def create_dataset(dest_dir: str, short_name: str) -> Dataset:
             variable,
             variable_source,
         )
-
-    # TODO: remove before merging
-    for c in t.columns:
-        try:
-            underscore_table(t[[c]])
-        except NameError:
-            print(f"Problem underscoring column {c}")
 
     ds.add(underscore_table(t))
     return ds

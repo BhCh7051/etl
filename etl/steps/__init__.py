@@ -393,6 +393,9 @@ class ReferenceStep(DataStep):
 @dataclass
 class WaldenStep(Step):
     path: str
+    # NOTE: reusing catalog between steps improves performance a lot, call `refresh` on it
+    # to get the latest version
+    _walden_catalog = walden.Catalog()
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -431,7 +434,7 @@ class WaldenStep(Step):
             raise ValueError(f"malformed walden path: {self.path}")
 
         namespace, version, short_name = self.path.split("/")
-        catalog = walden.Catalog()
+        catalog = self._walden_catalog
 
         # normally version is a year or date, but we also accept "latest"
         if version == "latest":
